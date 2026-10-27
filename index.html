@@ -15,6 +15,106 @@
         <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
         <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
         <script src="https://unpkg.com/aframe-mirror-component/dist/aframe-mirror-component.min.js"></script>
+         <script>
+            /* Grip either controller near a named mesh to pick it up. Release to leave it there. */
+            AFRAME.registerComponent('vr-pickup', {
+                schema: {
+                    names: {type: 'array'},
+                    distance: {default: 0.4}
+                },
+
+                init: function () {
+                    this.parts = [];
+                    this.held = null;
+                    this.heldBy = null;
+                    this.handPos = new THREE.Vector3();
+                    this.box = new THREE.Box3();
+                    this.onModelLoaded = this.onModelLoaded.bind(this);
+                    this.tryGrab = this.tryGrab.bind(this);
+                    this.release = this.release.bind(this);
+                    this.el.addEventListener('model-loaded', this.onModelLoaded);
+                },
+
+                onModelLoaded: function () {
+                    var names = this.data.names;
+                    var root = this.el.getObject3D('mesh');
+                    var self = this;
+                    if (!root || !names.length) { return; }
+                    root.traverse(function (node) {
+                        if (self.nameMatches(node.name, names)) { self.parts.push(node); }
+                    });
+                    if (!this.parts.length) {
+                        console.warn('vr-pickup: model has no objects named ' + names.join(', '));
+                        return;
+                    }
+                    var hands = this.el.sceneEl.querySelectorAll('[hand-controls]');
+                    for (var i = 0; i < hands.length; i++) {
+                        hands[i].addEventListener('gripdown', this.tryGrab);
+                        hands[i].addEventListener('gripup', this.release);
+                    }
+                },
+
+                nameMatches: function (nodeName, names) {
+                    if (!nodeName) { return false; }
+                    var value = nodeName.toLowerCase();
+                    for (var i = 0; i < names.length; i++) {
+                        var wanted = names[i].toLowerCase();
+                        if (value === wanted || value.indexOf(wanted + '.') === 0) { return true; }
+                    }
+                    return false;
+                },
+
+                tryGrab: function (evt) {
+                    var handEl = evt.currentTarget;
+                    if (this.held && this.heldBy === handEl) { return; }
+                    handEl.object3D.getWorldPosition(this.handPos);
+                    var best = null;
+                    var bestDist = this.data.distance;
+                    for (var i = 0; i < this.parts.length; i++) {
+                        var part = this.parts[i];
+                        this.box.setFromObject(part);
+                        if (this.box.isEmpty()) { continue; }
+                        var dist = this.box.distanceToPoint(this.handPos);
+                        if (dist < bestDist) {
+                            best = part;
+                            bestDist = dist;
+                        }
+                    }
+                    if (!best) { return; }
+                    if (this.held) { this.dropHeld(); }
+                    var home = best.parent;
+                    handEl.object3D.attach(best);
+                    this.held = {
+                        object: best,
+                        home: home,
+                        position: best.position.clone(),
+                        quaternion: best.quaternion.clone(),
+                        scale: best.scale.clone()
+                    };
+                    this.heldBy = handEl;
+                },
+
+                dropHeld: function () {
+                    if (!this.held) { return; }
+                    this.held.home.attach(this.held.object);
+                    this.held = null;
+                    this.heldBy = null;
+                },
+
+                release: function (evt) {
+                    if (!this.held || evt.currentTarget !== this.heldBy) { return; }
+                    this.dropHeld();
+                },
+
+                tick: function () {
+                    if (!this.held) { return; }
+                    var obj = this.held.object;
+                    obj.position.copy(this.held.position);
+                    obj.quaternion.copy(this.held.quaternion);
+                    obj.scale.copy(this.held.scale);
+                }
+            });
+        </script>
     </head>
 
     <body>
@@ -41,7 +141,8 @@
                 visible="true"
                 shadow="cast: true"
                 geometry=""
-                cube-env-map="path: ./env/g_cube/; extension: jpg; reflectivity: 0.99;">
+                cube-env-map="path: ./env/g_cube/; extension: jpg; reflectivity: 0.99;"
+                vr-pickup="names: impossible_cube, impossible_prism">
             </a-entity>
 
             <a-entity id="Navmesh" nav-mesh gltf-model="#navmesh" visible="false"></a-entity>
